@@ -8,9 +8,28 @@ import numpy as np
 import operator
 import functools
 import copy 
-from DSLog.aux_functions import *
 import math
 from collections.abc import Iterable
+import uuid
+
+def reset_array_prov(array, array_id = None):
+    if array_id == None:
+        array_id = uuid.uuid4()
+    for index, x in np.ndenumerate(array):
+        x.set_provenance(uuid.uuid4())
+        x.write((array_id, array.shape, index))
+    return array
+
+def set_array_prov(array, fp, array_id = None):
+    if array_id == None:
+        array_id = uuid.uuid4()
+
+    new_array = np.empty(array.shape, dtype=object)
+    for index, x in np.ndenumerate(array):
+        new_array[index] = TrackedObj(x, fp, uuid.uuid4())
+        new_array[index].write((array_id, array.shape, index))
+    return array
+
 
 def add_provenance_copy(orig_func):
     #doesn't quite work when we return a data type that is not a float (works for a bit, but might not have
@@ -19,45 +38,32 @@ def add_provenance_copy(orig_func):
     @functools.wraps(orig_func)
     def funct(ref, *args):
         args2 = []
-        provenance = copy.copy(ref.provenance) # need to copy? potentially expensive
+        provenance = [ref.id]
         for arg in args:
-            if hasattr(arg, 'provenance') and hasattr(arg, 'value'):
-                provenance += arg.provenance
+            if hasattr(arg, 'id') and hasattr(arg, 'value'):
+                provenance += arg.id
                 args2.append(arg.value)
             else:
                 args2.append(arg)
-        if len(args2) != 0:
+        args_size = len(args2)
+        if args_size != 0:
             value = orig_func(ref,*args2)
         else:
             value = orig_func(ref)
+            
         if not isinstance(value, Iterable):
-            output = ref.__class__(value, provenance)
+            output = ref.__class__(value, ref.fp)
+            for id in provenance:
+                output.write(id)
         else:
             outputs = []
             for v in value:
-                outputs.append(ref.__class__(v, provenance))
+                out = ref.__class__(v, ref.fp)
+                outputs.append(out)
+                for id in provenance:
+                    out.write(id)
             output = tuple(outputs)
         return output
-    return funct
-
-def add_provenance_self(orig_func):
-    @functools.wraps(orig_func)
-    def funct(ref, *args):
-        args2 = []
-        provenance = copy.copy(ref.provenance) # need to copy? potentially expensive
-        for arg in args:
-            if hasattr(arg, 'provenance') and hasattr(arg, 'value'):
-                provenance += arg.provenance
-                args2.append(arg.value)
-            else:
-                args2.append(arg.value)
-        if len(args2) != 0:
-            value = orig_func(ref,*args2)
-        else:
-            value = orig_func(ref)
-        ref.set_value(value)
-        ref.set_provenance(provenance)
-        return ref
     return funct
 
 
@@ -65,24 +71,22 @@ class TrackedObj(object):
     """ Currently only supports float methods but can technically work for any data type
     """  
     
-    def __init__(self, value, id):
+    def __init__(self, value, file_pointer, id = None):
         self.value = value
-        
-        self.id = id
-        
-        self.provenance = id
-    
-    
-    def set_provenance(self, id):
-        if id != None:
-            self.id = id
-        
         if id == None:
-            self.provenance = []
-        elif isinstance(id, list):
-            self.provenance = id
+            self.id = uuid.uuid4()
         else:
-            self.provenance = [id]
+            self.id = id
+        self.fp = file_pointer
+    
+    def write(self, prev, next = None):
+        if next == None:
+            next = self.id
+        tup = str((prev, next))
+        self.fp.write(tup)
+
+    def set_provenance(self, id):
+        self.id = id
 
     def set_value(self, value):
         self.value = value
